@@ -15,7 +15,7 @@ Install prerequisites with this
 Then run `goauth` on your localhost. It will ask for client id and secret id.
 These have to be created by yourself; follow the url goauth prints, to create
 OAuth credentials, then go to localhost:3001 to create the API key for
-gcal2rem. A config.json file will be created sub as this:
+gcal2rem. A config.json file will be created such as this:
 
 ```
 {
@@ -37,3 +37,11 @@ Operation
 
 1) add call to gcal2rem in your crontab: `gcal2rem -c .../config.json -o /home/you/.remind/gcal`
 2) add `INCLUDE /home/you/.remind/gcal` 
+
+The remind file will look like this:
+
+```
+REM 12 Aug +3 %a whole day event
+REM 20 Aug +3 %a 14:30 specific time event
+```
+
