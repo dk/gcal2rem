@@ -1,0 +1,130 @@
+#!/usr/bin/env perl
+use strict;
+use warnings;
+use Getopt::Long;
+use Encode;
+use Data::Dumper;
+use API::Google::GCal;
+use DateTime::Format::RFC3339;
+use DateTime;
+use JSON::XS;
+use FindBin qw($Bin);
+
+my %opt = (
+	user       => undef,
+	calendar   => undef,
+	tokenfile  => "$Bin/config.json",
+	output     => '-',
+	help       => 0,
+);
+
+sub help
+{
+	print <<HELP;
+$0 - fetch google calendar and dump in remind(1) format
+
+options:
+     h | help      - this text
+     u | user      - google login (required)
+     t | tokenfile - file with tokens (created by 'goauth',default $opt{tokenfile} )
+     c | calendar  - calendar to sync
+     o | output    - output file or - for standard output
+
+HELP
+	exit 1
+}
+
+GetOptions(\%opt,
+	'user|u=s',
+	'output|o=s',
+	'calendar|c=s',
+	'tokenfile|t=s',
+	'help|h',
+) or help;
+help if $opt{help};
+if ( $opt{output} ne '-') {
+	open OUT, ">", $opt{output} or die "Cannot write $opt{output}:$!\n";
+	select OUT;
+}
+
+if ( open F, "<", $opt{tokenfile}) {
+	my $ct;
+	while (<F>) {
+		next if /^\s*\#/;
+		$ct .= $_;
+	}
+	close F;
+	my $js;
+	eval { 
+		$js = decode_json($ct);
+		$js = $js->{gapi}->{tokens};
+		ref($js) eq 'HASH' or die "/gapi/tokens is not a hash";
+	};
+	die "Bad content in $opt{tokenfile}:$@\n" if $@;
+	my @users = sort keys %$js;
+	$opt{user} //= $users[0];
+} else {
+	die "Cannot open $opt{tokenfile}:$!\n";
+}
+
+my $gapi = API::Google::GCal->new({ tokensfile => $opt{tokenfile}});
+$opt{calendar} //= $opt{user};
+$gapi->refresh_access_token_silent($opt{user});
+
+my $cid = $gapi->get_calendar_id_by_name($opt{user}, $opt{calendar});
+die "Cannot get calendar '$opt{calendar}' for '$opt{user}'\n" unless defined $cid;
+
+my ($page_token);
+
+my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = localtime(time);
+$year += 1900;
+
+my $f = DateTime::Format::RFC3339->new();
+my $today = DateTime->today;
+$today->subtract( weeks => 1);
+$today = $f->format_datetime($today);
+
+my @events;
+my $url = $gapi->{api_base}.'/calendars/'.$cid.'/events?'.
+	'maxResults=2500&'.
+	"timeMin=$today";
+do {
+	my $res = $gapi->api_query({
+		method => 'get',
+		route => $url . (defined $page_token ? "&pageToken=$page_token" : ''),
+		user => $opt{user}
+	});
+	die $res->{error}->{message} if defined $res->{error};
+	if (defined $res->{items}) {
+		for my $e ( @{ $res->{items} // [] } ) {
+			my $d;
+			next if defined $e->{recurrence};
+			if ( defined $e->{start}->{dateTime}) {
+				eval { $d = $f->parse_datetime($e->{start}->{dateTime}); };
+				die "$@ ".Dumper($e) if $@;
+			} elsif ( defined $e->{start}->{date}) {
+				if ( $e->{start}->{date} =~ /^(\d\d\d\d)\-(\d\d)\-(\d\d)$/) {
+					$d = DateTime->new( year => $1, month => $2, day => $3);
+				} else {
+					die "bad date: $e->{start}->{date}\n";
+				}
+			} else {
+				die Dumper($e);
+			}
+			Encode::_utf8_off($e->{summary});
+			push @events, [ $d->epoch, $d, $e->{summary} ];
+		}
+	}
+	$page_token = $res->{nextPageToken};
+} while (defined $page_token);
+
+@events = sort { $a->[0] <=> $b->[0] } @events;
+for (@events) {
+	my ( undef, $d, $t) = @$_;
+	print 'REM ';
+	print $d->day, ' ', $d->month_abbr, ' +3 %a ';
+	printf "(%d) ", $d->year if $d->year ne $year;
+	printf "%d:%02d ", $d->hour, $d->min if $d->hour > 0 and $d->min > 0;
+	print $t, "\n";
+}
+
