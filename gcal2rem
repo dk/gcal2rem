@@ -124,7 +124,7 @@ for (@events) {
 	print 'REM ';
 	print $d->day, ' ', $d->month_abbr, ' +3 %a ';
 	printf "(%d) ", $d->year if $d->year ne $year;
-	printf "%d:%02d ", $d->hour, $d->min if $d->hour > 0 and $d->min > 0;
+	printf "%d:%02d ", $d->hour, $d->min if $d->hour > 0 or $d->min > 0;
 	print $t, "\n";
 }
 
